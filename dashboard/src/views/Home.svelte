@@ -3,6 +3,7 @@
   import EventRow from '../components/EventRow.svelte';
   import TaskRow from '../components/TaskRow.svelte';
   import NowPlaying from '../components/NowPlaying.svelte';
+  import PhotoCard from '../components/PhotoCard.svelte';
   import { nowPlaying } from '../lib/ha.svelte.js';
   import { clock, calendar, weather, lists, ui, completeItem, loadCalendar, loadList } from '../lib/state.svelte.js';
   import { clockTime, longDate, eventsOn, addDays, weatherInfo, time, dow } from '../lib/format.js';
@@ -90,34 +91,12 @@
     </footer>
   </section>
 
-  <section class="sheet todo" style="--accent:var(--blue)">
-    <header>
-      <h2>Tasks</h2>
-      {#if lists.todo.items}<span class="count num">{todos.length}</span>{/if}
-    </header>
-    <div class="scroll">
-      {#each todos as item (item.id)}
-        <TaskRow {item} now={clock.now} ondone={(i) => completeItem('todo', i)}
-          person={item.assignee ? lists.todo.people?.[item.assignee] : null}
-          section={item.section ? (lists.todo.sections || []).find((x) => x.id === item.section)?.name : null} />
-      {:else}
-        <p class="empty">{todoNote || (lists.todo.items ? 'All done.' : 'Loading…')}</p>
-      {/each}
-    </div>
-    <footer>
-      {#if lists.todo.error && lists.todo.items}
-        <!-- Saved items are still shown, but say they may be out of date and offer a retry. -->
-        <span class="note warn">{todoNote.startsWith('Todoist isn') ? 'Not connected' : 'Couldn’t refresh'} · saved list</span>
-        <button class="more" onclick={() => loadList('todo')}>Retry</button>
-      {:else}
-        <button class="more" onclick={() => (ui.tab = 'todo')}>Open list</button>
-      {/if}
-    </footer>
-  </section>
+  <section class="todo pc"><PhotoCard /></section>
 </div>
 
 <style>
   .home { display: grid; grid-template-columns: 412px 1fr 1fr; gap: 20px; height: 100%; padding: 10px 28px 28px; }
+  .pc { padding: 0; min-height: 0; overflow: hidden; border-radius: 24px; }
   .now { display: flex; flex-direction: column; min-width: 0; }
   .date { font-size: 26px; font-weight: 600; color: var(--secondary); padding: 6px 4px 0; }
   .clock { font-size: 156px; font-weight: 600; line-height: 1; letter-spacing: -.04em; margin: 2px 0 0 -4px; }

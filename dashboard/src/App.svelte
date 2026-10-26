@@ -7,7 +7,7 @@
   import Ambient from './views/Ambient.svelte';
   import Settings from './components/Settings.svelte';
   import Music from './views/Music.svelte';
-  import Recipes from './views/Recipes.svelte';
+  import Photos from './views/Photos.svelte';
   import Message from './components/Message.svelte';
   import { connectHA, haConfigured } from './lib/ha.svelte.js';
   import { ui, clock, weather, photos, messages, start, startSlideshow, loadList, photosVisible } from './lib/state.svelte.js';
@@ -17,9 +17,8 @@
   const TABS = [
     { id: 'home', label: 'Home' },
     { id: 'calendar', label: 'Calendar' },
-    { id: 'groceries', label: 'Groceries' },
+    { id: 'photos', label: 'Photos' },
     { id: 'todo', label: 'Tasks' },
-    { id: 'recipes', label: 'Recipes' },
     // Music appears once the frame has a Home Assistant token (see docs/frame.md).
     ...(haConfigured() ? [{ id: 'music', label: 'Music' }] : []),
   ];
@@ -37,7 +36,7 @@
   });
 
   // A list tab shows fresh items when opened (Groceries isn't polled while it's closed).
-  $effect(() => { if (ui.tab === 'groceries' || ui.tab === 'todo') loadList(ui.tab); });
+  $effect(() => { if (ui.tab === 'todo') loadList('todo'); });
 </script>
 
 <div class="stage">
@@ -61,9 +60,8 @@
     {#if !ui.idle}
     {#if ui.tab === 'home'}<Home />
     {:else if ui.tab === 'calendar'}<Week />
+    {:else if ui.tab === 'photos'}<Photos />
     {:else if ui.tab === 'music'}<Music />
-    {:else if ui.tab === 'recipes'}<Recipes />
-    {:else if ui.tab === 'groceries'}<List name="groceries" title="Groceries" accent="var(--orange)" accentText="var(--orange-text)" />
     {:else}<List name="todo" title="Tasks" accent="var(--blue)" accentText="var(--blue-text)" board />{/if}
     {/if}
   </main>

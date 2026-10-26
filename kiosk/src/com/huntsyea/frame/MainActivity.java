@@ -123,11 +123,21 @@ public class MainActivity extends Activity {
 
       @Override
       public void onReceivedSslError(WebView view, SslErrorHandler sslHandler, SslError error) {
-        // Never bypass certificate checks; just try again (the clock is probably still syncing).
+        String host = android.net.Uri.parse(error.getUrl()).getHost();
+        // Android 6 lacks the newer root CAs behind workers.dev. For our own Worker only, accept an
+        // "untrusted root" error. Expired, not-yet-valid, wrong-host and other errors are still blocked.
+        if (error.getPrimaryError() == SslError.SSL_UNTRUSTED
+            && "photo-frame-dashboard.kkpalanisamy.workers.dev".equals(host)) {
+          Log.w(TAG, "ssl untrusted root accepted for " + host);
+          sslHandler.proceed();
+          return;
+        }
+        // Never bypass certificate checks otherwise; just try again (the clock is probably still syncing).
         Log.w(TAG, "ssl error " + error.getPrimaryError() + " (device time " + new java.util.Date() + ")");
         sslHandler.cancel();
         scheduleRetry();
       }
+
     });
     web.addJavascriptInterface(new Bridge(), "FrameKiosk");
     applyBrightness(getSharedPreferences(PREFS, MODE_PRIVATE).getFloat("brightness", -1f));

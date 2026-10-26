@@ -17,8 +17,8 @@ const MAX_AGE_MS = 30 * 60 * 1000;
 const MAX_PHOTOS = 500;
 
 export function albumToken(albumUrl) {
-  const m = /\/shared\/album\/([A-Za-z0-9_-]+)/.exec(albumUrl || '');
-  return m ? m[1] : null;
+const m = /\/shared\/album\/([A-Za-z0-9_-]+)|\/sharedalbum\/#([A-Za-z0-9_-]+)/.exec(albumUrl || '');
+return m ? (m[1] || m[2]) : null;
 }
 
 async function ck(url, body) {
@@ -31,10 +31,78 @@ async function ck(url, body) {
   return res.json();
 }
 
+// Classic iCloud Shared Albums (https://www.icloud.com/sharedalbum/#<token>) use the older
+// "sharedstreams" service, not CloudKit. Also undocumented. The first call usually answers
+// 330 with the album's real host in X-Apple-MMe-Host.
+const STREAMS_HOST = 'p23-sharedstreams.icloud.com';
+
+async function streams(host, token, path, body) {
+  for (let i = 0; i < 3; i++) {
+    const res = await fetch(`https://${host}/${token}/sharedstreams/${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain', Origin: 'https://www.icloud.com' },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 330) {
+      const j = await res.json().catch(() => ({}));
+      host = res.headers.get('X-Apple-MMe-Host') || j['X-Apple-MMe-Host'];
+      if (!host) throw new Error('iCloud redirect without a host');
+      continue;
+    }
+    if (!res.ok) throw new Error('iCloud HTTP ' + res.status);
+    return { host, data: await res.json() };
+  }
+  throw new Error('iCloud redirected too many times');
+}
+
+async function fetchSharedStream(token) {
+  const { host, data } = await streams(STREAMS_HOST, token, 'webstream', { streamCtag: null });
+
+  // For each photo, take the smallest size that's still >= 1280px on its long side.
+  const items = (data.photos || [])
+    .filter((p) => p.mediaAssetType !== 'video' && p.derivatives)
+    .map((p) => {
+      const sizes = Object.values(p.derivatives)
+        .map((d) => ({ checksum: d.checksum, w: Number(d.width), h: Number(d.height) }))
+        .filter((d) => d.checksum && d.w && d.h)
+        .sort((a, b) => Math.max(a.w, a.h) - Math.max(b.w, b.h));
+      const d = sizes.find((x) => Math.max(x.w, x.h) >= 1280) || sizes[sizes.length - 1];
+      return d && { guid: p.photoGuid, d, date: p.dateCreated || p.batchDateCreated || null };
+    })
+    .filter(Boolean)
+    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
+    .slice(0, MAX_PHOTOS);
+
+  // Exchange checksums for (expiring) download URLs, 100 photos per call.
+  const urls = {};
+  for (let i = 0; i < items.length; i += 100) {
+    const { data: u } = await streams(host, token, 'webasseturls', {
+      photoGuids: items.slice(i, i + 100).map((x) => x.guid),
+    });
+    for (const [checksum, it] of Object.entries(u.items || {})) {
+      urls[checksum] = 'https://' + it.url_location + it.url_path;
+    }
+  }
+
+  return items
+    .filter((x) => urls[x.d.checksum])
+    .map((x) => ({
+      id: String(x.guid).replace(/[^A-Za-z0-9-]/g, '') + '-' + String(x.d.checksum).replace(/[^A-Za-z0-9]/g, '').slice(0, 12),
+      w: x.d.w,
+      h: x.d.h,
+      date: x.date,
+      url: urls[x.d.checksum],
+    }));
+}
+
+
 // Album -> [{ id, w, h, date, url }], newest first. Prefers the edited version of a photo.
 export async function fetchAlbum(albumUrl) {
   const token = albumToken(albumUrl);
   if (!token) throw new Error('ALBUM_URL is not an iCloud shared album link');
+
+  if (/\/sharedalbum\/#/.test(albumUrl)) return fetchSharedStream(token);
+
   const resolved = await ck(CK + '/public/records/resolve?remapEnums=true', { shortGUIDs: [{ value: token }] });
   const share = resolved.results && resolved.results[0];
   const access = share && share.anonymousPublicAccess;
@@ -117,26 +185,35 @@ const PHOTO_TTL_S = 30 * 24 * 3600; // keep each image's bytes in KV for 30 days
 
 // Images are slow to fetch from iCloud (several seconds each), so the bytes are kept in KV
 // after the first fetch; later requests from any device are served from there.
-export async function photoResponse(env, id, ctx) {
+// thumb=true returns a ~320px version for the Photos grid, made from the cached full image when possible.
+export async function photoResponse(env, id, ctx, thumb = false) {
   const headers = {
     'Content-Type': 'image/jpeg',
     // The id includes the image fingerprint, so a given URL never changes: cache it on the frame.
     'Cache-Control': 'private, max-age=604800, immutable',
   };
-  const stored = await env.CALENDAR.get('photo:' + id, 'arrayBuffer');
+  const kvKey = (thumb ? 'thumb:' : 'photo:') + id;
+  const stored = await env.CALENDAR.get(kvKey, 'arrayBuffer');
   if (stored) return new Response(stored, { headers: { ...headers, 'X-Photo-Source': 'kv' } });
 
-  let photo = (await getAlbum(env)).photos.find((p) => p.id === id);
-  let upstream = photo && (await fetch(photo.url));
-  if (!upstream || !upstream.ok) {
-    // Link expired or the photo is new: re-list once and try again.
-    photo = (await getAlbum(env, { force: true })).photos.find((p) => p.id === id);
-    upstream = photo && (await fetch(photo.url));
+  let source = thumb ? await env.CALENDAR.get('photo:' + id, 'arrayBuffer') : null;
+  let photo;
+  if (!source) {
+    photo = (await getAlbum(env)).photos.find((p) => p.id === id);
+    let upstream = photo && (await fetch(photo.url));
+    if (!upstream || !upstream.ok) {
+      // Link expired or the photo is new: re-list once and try again.
+      photo = (await getAlbum(env, { force: true })).photos.find((p) => p.id === id);
+      upstream = photo && (await fetch(photo.url));
+    }
+    if (!upstream || !upstream.ok) return new Response('not found', { status: 404 });
+    source = await upstream.arrayBuffer();
   }
-  if (!upstream || !upstream.ok) return new Response('not found', { status: 404 });
-  // Sized once for the 1920x1080 screen: a landscape fills it, a portrait fills half (they show in pairs).
-  const { bytes } = await shrink(env, await upstream.arrayBuffer(), 'image/jpeg', photo.h > photo.w ? 960 : 1920, 250 * 1024);
-  const save = env.CALENDAR.put('photo:' + id, bytes, { expirationTtl: PHOTO_TTL_S });
+  // Sized for the 1280x800 frame: a landscape fills it, a portrait fills half. Thumbs are ~320px.
+  const portrait = photo ? photo.h > photo.w : false;
+  const width = thumb ? 320 : (portrait ? 640 : 1280);
+  const { bytes } = await shrink(env, source, 'image/jpeg', width, thumb ? 40 * 1024 : 180 * 1024);
+  const save = env.CALENDAR.put(kvKey, bytes, { expirationTtl: PHOTO_TTL_S });
   if (ctx && ctx.waitUntil) ctx.waitUntil(save); else await save;
-  return new Response(bytes, { headers: { ...headers, 'X-Photo-Source': 'icloud' } });
+  return new Response(bytes, { headers: { ...headers, 'X-Photo-Source': thumb ? 'thumb' : 'icloud' } });
 }

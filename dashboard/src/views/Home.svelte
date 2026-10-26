@@ -13,10 +13,10 @@
   // Upcoming: the rest of this week, tomorrow through Sunday (the feed is already sorted).
   let upcoming = $derived.by(() => {
     const tomorrow = addDays(clock.now, 1).getTime();
-    const nextMonday = addDays(clock.now, (8 - clock.now.getDay()) % 7 || 7).getTime();
+        const weekAhead = tomorrow + 7 * 24 * 3600 * 1000;
     return events.filter((e) => {
       const start = e.allDay ? new Date(e.start + 'T00:00').getTime() : Date.parse(e.start);
-      return start >= tomorrow && start < nextMonday;
+            return start >= tomorrow && start < weekAhead;
     });
   });
   let todos = $derived(lists.todo.items || []);
@@ -77,7 +77,7 @@
       {#each upcoming as e (e.uid + e.start)}
         <EventRow event={e} now={clock.now} showDay />
       {:else}
-        <p class="empty">{calendar.data ? 'Nothing else this week' : ''}</p>
+	        <p class="empty">{calendar.data ? 'Nothing in the next 7 days' : ''}</p>        
       {/each}
     </div>
     <footer>
